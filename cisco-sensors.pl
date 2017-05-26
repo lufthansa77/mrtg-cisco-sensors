@@ -1,7 +1,15 @@
-# Cisco sensors for mrtg module  v0.001 - 11.5.2017
-# DC
+# Cisco sensors for mrtg module  v0.02 - 15.5.2017   DC
 #
-# cfgmaker --host-template=cisco-sensors.htp
+# INSTALL
+#    cpanm RRDTool::OO
+#    cfgmaker --host-template=cisco-sensors.htp
+
+# hack skrze rrd_tune aby to umelo zaporna cisla
+# je potreba to pustit a pak jeste pockat a pustit to znovu
+#
+#  rrdtool info test.rrd |grep ds
+#  rrdtool tune test.rrd --minimum ds0:-100
+#
 
 use Data::Dump qw(pp);
 
@@ -56,7 +64,7 @@ my @precision = ( snmpwalk( $router, $v3opt, c_oid_entSensorPrecision ) );
 my @scale     = ( snmpwalk( $router, $v3opt, c_oid_entSensorScale ) );
 my @name      = ( snmpwalk( $router, $v3opt, c_oid_entPhysicalName ) );
 
-sub save_to_hash {  # {{{
+sub save_to_hash {                                                          # {{{
     my ( $arry, $key ) = @_;
 
     foreach my $line (@$arry) {
@@ -113,6 +121,35 @@ foreach my $index ( keys %{$sensors} ) {
 #            value => 32520,
 #          },
 
+#pp($router_opt);
+#{
+#  "enable-ipv6"   => 0,
+#  enablesnmpv3    => 0,
+#  global          => [
+#                       "WorkDir: /var/www/html/north.hebe.cz/mrtg",
+#                       "Options[_]: bits,growright,nobanner",
+#                       "14all*DontShowIndexGraph[_]: Yes",
+#                       "14all*Columns: 1",
+#                       "LogFormat: rrdtool",
+#                     ],
+#  "host-template" => "cisco-sensors.pl",
+#  ifdesc          => "name",
+#  interfaces      => 1,
+#  "show-op-down"  => 1,
+#  "use-16bit"     => 0,
+#}
+
+sub return_workdir {
+    my %h = ();
+
+    foreach my $line ( @{ $router_opt->{global} } ) {
+        my ( $key, $value ) = split( /:/, $line, 2 );
+        $h{$key} = $value;
+    }
+    return ( $h{WorkDir} );
+}
+my $work_dir = return_workdir();
+
 foreach my $index ( sort { $a <=> $b } keys %{$sensors} ) {
     my $rec       = $sensors->{$index};
     my $value     = $rec->{value};
@@ -124,21 +161,33 @@ foreach my $index ( sort { $a <=> $b } keys %{$sensors} ) {
     my $name      = $rec->{name};
     my $oid       = $rec->{oid};
 
-    my $file_name = $router_name. "_sensor_" . $index;
+    my $file_name = $router_name . "_sensor_" . $index;
+
+    # rrd_tune hack pro zaporna cisla:
+    my $rrd_file_name = $work_dir . "/" . $file_name . ".rrd";
+    $rrd_file_name =~ s/^\s+//;
+    use RRDTool::OO;
+    my $rrd = RRDTool::OO->new( file => "$rrd_file_name" );
+    $rrd->tune( dsname => 'ds0', minimum => -10000000 );
+    $rrd->tune( dsname => 'ds1', minimum => -10000000 );
 
     $target_lines .= "# Sensor  $name\n";
-    if ( $value > 0 ) {
-        if ( $precision != 0 ) {                 # aby se nedelilo nulou
+    if ( $value > 0 ) {    # pokud by nebyl hack rrd_tune je potreba otacet hodnoty do kladnych cisel
+        if ( $precision != 0 ) {    # aby se nedelilo nulou
             $target_lines .= "Target[$file_name]: $oid&$oid:$router_connect / (10**$precision)\n";
         } else {
             $target_lines .= "Target[$file_name]: $oid&$oid:$router_connect\n";
         }
 
     } elsif ( $value < 0 ) {
-        if ( $precision != 0 ) {                 # aby se nedelilo nulou
-            $target_lines .= "Target[$file_name]: $oid&$oid:$router_connect / (10**$precision) * -1\n";
+
+        if ( $precision != 0 ) {    # aby se nedelilo nulou
+                                    #$target_lines .= "Target[$file_name]: $oid&$oid:$router_connect / (10**$precision) * -1\n";
+            $target_lines .= "Target[$file_name]: $oid&$oid:$router_connect / (10**$precision)\n";
         } else {
-            $target_lines .= "Target[$file_name]: $oid&$oid:$router_connect * -1\n";
+
+            #$target_lines .= "Target[$file_name]: $oid&$oid:$router_connect * -1\n";
+            $target_lines .= "Target[$file_name]: $oid&$oid:$router_connect\n";
         }
     } else {
         $target_lines .= "Target[$file_name]: $oid&$oid:$router_connect\n";
@@ -166,35 +215,35 @@ PageTop[$file_name]: <h2>$sysname</h2>
           <td>$name ($type_str)</td>
      </tr></table></div>
 ECHO
-;
+      ;
 }
 ##### Pavouk CPU, MEM
 $head_lines .= <<ECHO
 ECHO
-;
-my (@entid) = snmpwalk($router,$v3opt,'1.3.6.1.4.1.9.9.109.1.1.1.1.2');
+  ;
+my (@entid) = snmpwalk( $router, $v3opt, '1.3.6.1.4.1.9.9.109.1.1.1.1.2' );
 my %entids;
 foreach my $ent (@entid) {
-   $ent =~ /(\d+):(\d+)/;
-   my $instance= $1;
-   my $entindex = $2;
-        if ($entindex eq "0") {
-                $entids{$instance}="CPU";
-                next;
-        }
-   my ($entname) = snmpget($router,$v3opt,'1.3.6.1.2.1.47.1.1.1.1.7.'.$entindex);
-   $entids{$instance}=$entname;
+    $ent =~ /(\d+):(\d+)/;
+    my $instance = $1;
+    my $entindex = $2;
+    if ( $entindex eq "0" ) {
+        $entids{$instance} = "CPU";
+        next;
+    }
+    my ($entname) = snmpget( $router, $v3opt, '1.3.6.1.2.1.47.1.1.1.1.7.' . $entindex );
+    $entids{$instance} = $entname;
 }
 
 my %cpu;
-my (@cputemp) = snmpwalk($router,$v3opt,'1.3.6.1.4.1.9.9.109.1.1.1.1.7');
-foreach my $cputempi(@cputemp) {
-   if ($cputempi eq "") { next }
-   $cputempi =~ /(\d+):\d+/;
-   my $instance=$1;
-   my $target_name=$router_name.".cpu".$instance;
-   $cpu{$instance}++;
-   $target_lines .= <<ECHO
+my (@cputemp) = snmpwalk( $router, $v3opt, '1.3.6.1.4.1.9.9.109.1.1.1.1.7' );
+foreach my $cputempi (@cputemp) {
+    if ( $cputempi eq "" ) { next }
+    $cputempi =~ /(\d+):\d+/;
+    my $instance    = $1;
+    my $target_name = $router_name . ".cpu" . $instance;
+    $cpu{$instance}++;
+    $target_lines .= <<ECHO
 
 # $sysname Processor Load - $entids{$instance}
 Target[$target_name]: 1.3.6.1.4.1.9.9.109.1.1.1.1.7.$instance&1.3.6.1.4.1.9.9.109.1.1.1.1.8.$instance:$router
@@ -214,19 +263,20 @@ PageTop[$target_name]: <h1>$entids{$instance} Processor Load on $sysname</h1>
 AddHead[$target_name]:<link rel="stylesheet" type="text/css" href="../css/14all.css" />
 PageFoot[$target_name]:<div>MRTG &copy;<a href="http://oss.oetiker.ch/mrtg/">Tobias Oetiker</a></div>
 ECHO
-;
+      ;
 }
+
 # Memory
-my (@memtemp) = snmpwalk($router,$v3opt,'1.3.6.1.4.1.9.9.48.1.1.1.2');
-foreach my $memtempi(@memtemp) {
-   if ($memtempi eq "") { next }
-   $memtempi =~ /(\d+):(.+)/;
-   my $instance=$1;
-   my $pool_name=$2;
-   my ($used, $free) = snmpget($router,$v3opt,'1.3.6.1.4.1.9.9.48.1.1.1.5.'.$instance, '1.3.6.1.4.1.9.9.48.1.1.1.6.'.$instance);
-   my $target_name=$router_name.".memory".$instance;
-   my $maxsize = $used+$free;
-   $target_lines .= <<MEM
+my (@memtemp) = snmpwalk( $router, $v3opt, '1.3.6.1.4.1.9.9.48.1.1.1.2' );
+foreach my $memtempi (@memtemp) {
+    if ( $memtempi eq "" ) { next }
+    $memtempi =~ /(\d+):(.+)/;
+    my $instance  = $1;
+    my $pool_name = $2;
+    my ( $used, $free ) = snmpget( $router, $v3opt, '1.3.6.1.4.1.9.9.48.1.1.1.5.' . $instance, '1.3.6.1.4.1.9.9.48.1.1.1.6.' . $instance );
+    my $target_name = $router_name . ".memory" . $instance;
+    my $maxsize     = $used + $free;
+    $target_lines .= <<MEM
 
 # $sysname $pool_name memory utilization
 Target[$target_name]: 1.3.6.1.4.1.9.9.48.1.1.1.6.$instance&1.3.6.1.4.1.9.9.48.1.1.1.5.$instance:$router
@@ -251,27 +301,28 @@ PageTop[$target_name]: <h1>$pool_name memory on $sysname</h1>
 AddHead[$target_name]:<link rel="stylesheet" type="text/css" href="../css/14all.css" />
 PageFoot[$target_name]:<div>MRTG &copy;<a href="http://oss.oetiker.ch/mrtg/">Tobias Oetiker</a></div>
 MEM
-;
+      ;
 }
+
 # Temperature
-my (@temp) = snmpwalk($router,$v3opt,'1.3.6.1.4.1.9.9.13.1.3.1.2');
-foreach my $tempi(@temp) {
-   if ($tempi eq "") { next } 
-   $tempi =~ /(\d+):(.*)/;
-   my $instance=$1;
-   my $sensor_name=$2;
-   if ($sensor_name eq "") {
+my (@temp) = snmpwalk( $router, $v3opt, '1.3.6.1.4.1.9.9.13.1.3.1.2' );
+foreach my $tempi (@temp) {
+    if ( $tempi eq "" ) { next }
+    $tempi =~ /(\d+):(.*)/;
+    my $instance    = $1;
+    my $sensor_name = $2;
+    if ( $sensor_name eq "" ) {
         $sensor_name = "NO NAME";
-   }
-   my ($temperature) = snmpget($router,$v3opt,"1.3.6.1.4.1.9.9.13.1.3.1.3.$instance");
-   if ($temperature eq "") { next }
-   my ($threshold) = snmpget($router,$v3opt,"1.3.6.1.4.1.9.9.13.1.3.1.4.$instance");
-   if ($threshold eq ("" || "0")) {
+    }
+    my ($temperature) = snmpget( $router, $v3opt, "1.3.6.1.4.1.9.9.13.1.3.1.3.$instance" );
+    if ( $temperature eq "" ) { next }
+    my ($threshold) = snmpget( $router, $v3opt, "1.3.6.1.4.1.9.9.13.1.3.1.4.$instance" );
+    if ( $threshold eq ( "" || "0" ) ) {
         $threshold = 100;
-   }
-   my $maxsize = ($threshold);
-   my $target_name = $router_name.".temp".$instance;
-   $target_lines .= <<TEMP
+    }
+    my $maxsize     = ($threshold);
+    my $target_name = $router_name . ".temp" . $instance;
+    $target_lines .= <<TEMP
 
 # $sysname $sensor_name temperature
 Target[$target_name]: 1.3.6.1.4.1.9.9.13.1.3.1.3.$instance&1.3.6.1.4.1.9.9.13.1.3.1.4.$instance:$router
@@ -296,6 +347,5 @@ PageTop[$target_name]: <h1>$sensor_name temperature on $sysname</h1>
 AddHead[$target_name]:<link rel="stylesheet" type="text/css" href="../css/14all.css" />
 PageFoot[$target_name]:<div>MRTG &copy;<a href="http://oss.oetiker.ch/mrtg/">Tobias Oetiker</a></div>
 TEMP
-;
+      ;
 }
-
