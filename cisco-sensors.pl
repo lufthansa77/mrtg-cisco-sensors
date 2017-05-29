@@ -1,8 +1,8 @@
-# Cisco sensors for mrtg module  v0.02 - 15.5.2017   DC
+# Cisco sensors for mrtg module  v0.03 - 26.5.2017   DC
 #
 # INSTALL
 #    cpanm RRDTool::OO
-#    cfgmaker --host-template=cisco-sensors.htp
+#    cfgmaker --host-template=cisco-sensors.pl
 
 # hack skrze rrd_tune aby to umelo zaporna cisla
 # je potreba to pustit a pak jeste pockat a pustit to znovu
@@ -11,7 +11,6 @@
 #  rrdtool tune test.rrd --minimum ds0:-100
 #
 
-use Data::Dump qw(pp);
 
 my %sensor_scale_units = ( 1  => 'yocto',
                            2  => 'zepto',
@@ -79,17 +78,6 @@ save_to_hash( \@type,      'type' );
 save_to_hash( \@precision, 'precision' );
 save_to_hash( \@scale,     'scale' );
 
-sub desetinna_carka {    # {{{
-    my $value = $_[0];
-    my $point = $_[1];
-    if ( $point != 0 ) {    # aby se nedelilo nulou
-        my $result = $value / ( 10**$point );
-        return ($result);
-    } else {
-        return ($value);
-    }
-}    # }}}
-
 my %names = ();
 foreach my $str (@name) {
     my ( $index, $string ) = split( /:/, $str, 2 );
@@ -106,6 +94,7 @@ foreach my $index ( keys %{$sensors} ) {
     $sensors->{$index}->{oid}       = c_oid_entSensorValue . "." . "$index";
 }
 
+use Data::Dump qw(pp);
 #pp(@value);
 #pp($sensors);
 
@@ -166,10 +155,12 @@ foreach my $index ( sort { $a <=> $b } keys %{$sensors} ) {
     # rrd_tune hack pro zaporna cisla:
     my $rrd_file_name = $work_dir . "/" . $file_name . ".rrd";
     $rrd_file_name =~ s/^\s+//;
-    use RRDTool::OO;
-    my $rrd = RRDTool::OO->new( file => "$rrd_file_name" );
-    $rrd->tune( dsname => 'ds0', minimum => -10000000 );
-    $rrd->tune( dsname => 'ds1', minimum => -10000000 );
+    if ( -e $rrd_file_name ) { #pokud uz sensor file existuje nastavime soubor i na zaporna cisla
+        use RRDTool::OO;
+        my $rrd = RRDTool::OO->new( file => "$rrd_file_name" );
+        $rrd->tune( dsname => 'ds0', minimum => -10000000 );
+        $rrd->tune( dsname => 'ds1', minimum => -10000000 );
+    }
 
     $target_lines .= "# Sensor  $name\n";
     if ( $value > 0 ) {    # pokud by nebyl hack rrd_tune je potreba otacet hodnoty do kladnych cisel
